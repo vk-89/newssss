@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>Shabd — Newspaper Reader</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&family=Noto+Sans+Devanagari:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* ============================= TOKENS ============================= */
+:root{
+  --font-display:'Playfair Display', Georgia, serif;
+  --font-ui:'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono:'IBM Plex Mono', ui-monospace, monospace;
+  --font-hi:'Noto Sans Devanagari', var(--font-ui);
+  --radius:10px;
+}
+[data-theme="paper"]{
+  --bg:#E7E0CB; --bg-elevated:#F4EFDE; --ink:#24211A; --ink-soft:#5B5544;
+  --rule:#C9BE9C; --accent:#2B4570; --accent-soft:#DEE6EF; --signature:#A5402F;
+  --card-bg:#FBF7EC; --canvas-filter:none; --canvas-frame:#FFFFFF;
+}
+[data-theme="bright"]{
+  --bg:#FFFFFF; --bg-elevated:#FFFFFF; --ink:#16140F; --ink-soft:#514B3D;
+  --rule:#E1DBC8; --accent:#2B4570; --accent-soft:#E7EDF5; --signature:#A5402F;
+  --card-bg:#FFFFFF; --canvas-filter:none; --canvas-frame:#FFFFFF;
+}
+[data-theme="night"]{
+  --bg:#17150F; --bg-elevated:#211E16; --ink:#EDE3CE; --ink-soft:#B7AD93;
+  --rule:#423C2C; --accent:#8CA9D4; --accent-soft:#293347; --signature:#C9A227;
+  --card-bg:#241F17; --canvas-filter:brightness(.88) contrast(1.03); --canvas-frame:#0f0e0a;
+}
+
+*{ box-sizing:border-box; }
+html,body{
+  margin:0; padding:0; height:100vh; height:100dvh; overflow:hidden;
+  background:var(--bg); color:var(--ink); font-family:var(--font-ui);
+  -webkit-tap-highlight-color:transparent;
+}
+#app{ position:fixed; inset:0; height:100vh; height:100dvh; overflow:hidden; }
+button{ font-family:inherit; }
+
+/* ============================= LAUNCHER ============================= */
+.launcher{
+  position:absolute; inset:0; overflow-y:auto; display:flex; align-items:flex-start;
+  justify-content:center; padding:8vh 20px 40px;
+}
+.launcher-inner{ max-width:460px; width:100%; }
+.masthead{ text-align:center; margin-bottom:36px; }
+.masthead-kicker{
+  display:block; font-family:var(--font-mono); font-size:11px; letter-spacing:.18em;
+  color:var(--signature); margin-bottom:14px; font-weight:500;
+}
+.masthead-title{
+  font-family:var(--font-display); font-weight:900; font-size:64px; line-height:.95;
+  margin:0 0 14px; color:var(--ink);
+}
+.masthead-tagline{
+  font-size:15px; line-height:1.55; color:var(--ink-soft); margin:0 auto; max-width:360px;
+}
+.launch-actions{ display:flex; flex-direction:column; gap:12px; margin-bottom:14px; }
+.launch-card{
+  display:block; text-align:left; border:1.5px solid var(--rule); border-radius:var(--radius);
+  padding:16px 18px; background:var(--bg-elevated); cursor:pointer; transition:border-color .15s, transform .1s;
+}
+.launch-card:active{ transform:scale(.99); }
+.launch-card:hover{ border-color:var(--accent); }
+.launch-card-title{ display:block; font-weight:600; font-size:15px; margin-bottom:3px; }
+.launch-card-sub{ display:block; font-size:12.5px; color:var(--ink-soft); }
+.url-box{ display:flex; gap:8px; margin-bottom:16px; }
+.url-box input{
+  flex:1; padding:12px 14px; border-radius:var(--radius); border:1.5px solid var(--rule);
+  background:var(--bg-elevated); color:var(--ink); font-size:14px; font-family:var(--font-ui);
+}
+.url-box input:focus{ outline:2px solid var(--accent); outline-offset:1px; }
+.url-box button{
+  padding:0 20px; border-radius:var(--radius); border:none; background:var(--accent);
+  color:#fff; font-weight:600; font-size:14px; cursor:pointer;
+}
+.launcher-note{ font-size:12px; color:var(--ink-soft); line-height:1.5; text-align:center; }
+.launcher-features{ margin:28px 0; padding:18px 0; border-top:1px solid var(--rule); border-bottom:1px solid var(--rule); }
+.lf-row{ display:flex; gap:12px; align-items:flex-start; padding:8px 0; font-size:13.5px; color:var(--ink-soft); }
+.lf-row b{ color:var(--ink); }
+.lf-num{ font-family:var(--font-mono); color:var(--signature); font-size:12px; padding-top:1px; }
+
+/* ============================= TOOLBAR ============================= */
+.toolbar{
+  position:absolute; top:0; left:0; right:0; z-index:30; display:flex; align-items:center;
+  gap:8px; padding:10px 12px; background:color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  backdrop-filter:blur(8px); border-bottom:1px solid var(--rule);
+  transform:translateY(-100%); transition:transform .25s ease;
+  overflow-x:auto; scrollbar-width:none;
+}
+.toolbar::-webkit-scrollbar{ display:none; }
+.toolbar.visible{ transform:translateY(0); }
+.tbtn-group{ display:flex; align-items:center; background:var(--bg); border-radius:8px; padding:2px; flex-shrink:0; }
+.tbtn{
+  border:none; background:transparent; color:var(--ink); font-size:15px; font-weight:600;
+  padding:7px 11px; border-radius:6px; cursor:pointer; line-height:1;
+}
+.tbtn:hover{ background:var(--accent-soft); }
+.page-indicator{ font-family:var(--font-mono); font-size:12.5px; color:var(--ink-soft); padding:0 6px; white-space:nowrap; }
+#backBtn{ font-family:var(--font-ui); font-size:13px; }
+.theme-dot{ width:22px; height:22px; border-radius:50%; padding:0; border:1.5px solid var(--rule); margin:0 2px; }
+.theme-dot.paper{ background:#E7E0CB; } .theme-dot.bright{ background:#FFFFFF; } .theme-dot.night{ background:#17150F; }
+[data-theme] .theme-dot[data-theme="paper"]{ }
+.toolbar .theme-dot.active{ border-color:var(--signature); border-width:2px; }
+.spacer{ flex:1; }
+
+/* ============================= VIEWER ============================= */
+.scroll-area{
+  position:absolute; inset:0; overflow:auto; touch-action:pan-y; background:var(--bg);
+  display:flex; justify-content:center; padding:56px 14px 24px;
+}
+.page-wrap{ position:relative; margin:0 auto; box-shadow:0 6px 24px rgba(0,0,0,.18); background:var(--canvas-frame); height:max-content; }
+#pdfCanvas{ display:block; filter:var(--canvas-filter); }
+.text-layer{ position:absolute; top:0; left:0; }
+.word{
+  position:absolute; transform-origin:0 0; cursor:pointer; color:transparent;
+  white-space:pre; line-height:1;
+}
+.word:hover, .word.active-word{ background:color-mix(in srgb, var(--accent) 22%, transparent); border-radius:2px; }
+
+/* ============================= WORD CARD ============================= */
+.word-card{
+  position:fixed; z-index:50; width:min(300px, calc(100vw - 24px)); background:var(--card-bg);
+  border-radius:12px; box-shadow:0 12px 32px rgba(0,0,0,.28); border:1px solid var(--rule);
+  padding:16px 16px 14px; opacity:0; transform:translateY(4px) scale(.98); transition:opacity .14s, transform .14s;
+  pointer-events:none;
+}
+.word-card.show{ opacity:1; transform:translateY(0) scale(1); pointer-events:auto; }
+.word-card::before{
+  content:''; position:absolute; left:var(--arrow-x, 24px); width:14px; height:14px;
+  background:var(--card-bg); border:1px solid var(--rule); transform:translateX(-50%) rotate(45deg);
+}
+.word-card.arrow-top::before{ top:-8px; border-right:none; border-bottom:none; }
+.word-card.arrow-bottom::before{ bottom:-8px; border-left:none; border-top:none; }
+.word-card-close{
+  position:absolute; top:8px; right:10px; border:none; background:none; font-size:18px;
+  color:var(--ink-soft); cursor:pointer; line-height:1; padding:4px;
+}
+.wc-word{ font-family:var(--font-display); font-weight:900; font-size:22px; text-transform:lowercase; color:var(--ink); }
+.word-card-head{ margin-bottom:8px; padding-right:18px; border-bottom:1px solid var(--rule); padding-bottom:8px; }
+.wc-section{ margin-top:10px; }
+.wc-label{ font-family:var(--font-mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--signature); margin-bottom:5px; }
+.wc-chips{ display:flex; flex-wrap:wrap; gap:6px; }
+.wc-chip{ background:var(--accent-soft); color:var(--accent); font-size:12.5px; padding:3px 9px; border-radius:20px; font-weight:500; }
+.wc-hindi{ font-family:var(--font-hi); font-size:19px; font-weight:600; color:var(--ink); }
+.wc-example{ font-size:13px; color:var(--ink-soft); line-height:1.5; font-style:italic; }
+.wc-loading{ display:flex; align-items:center; gap:9px; font-size:13px; color:var(--ink-soft); padding:6px 0; }
+.wc-error{ font-size:13px; color:var(--ink-soft); line-height:1.5; }
+.wc-retry{ border:none; background:var(--accent); color:#fff; font-size:12.5px; padding:5px 12px; border-radius:6px; cursor:pointer; margin-top:6px; display:inline-block; }
+.wc-spinner, .spinner-lg{
+  display:inline-block; border-radius:50%; border:2px solid var(--rule); border-top-color:var(--signature);
+  animation:spin .7s linear infinite; flex-shrink:0;
+}
+.wc-spinner{ width:14px; height:14px; }
+.spinner-lg{ width:30px; height:30px; border-width:3px; margin-bottom:12px; }
+@keyframes spin{ to{ transform:rotate(360deg); } }
+
+/* ============================= OVERLAYS ============================= */
+.loading-overlay{
+  position:absolute; inset:0; z-index:60; background:var(--bg); display:flex; flex-direction:column;
+  align-items:center; justify-content:center; color:var(--ink-soft); font-size:13.5px;
+}
+.toast{
+  position:fixed; left:50%; bottom:28px; transform:translateX(-50%) translateY(10px); z-index:70;
+  background:var(--ink); color:var(--bg); font-size:13px; padding:11px 18px; border-radius:10px;
+  max-width:calc(100vw - 40px); text-align:center; opacity:0; transition:opacity .2s, transform .2s; line-height:1.4;
+}
+.toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+
+@media (prefers-reduced-motion:reduce){
+  *{ transition:none !important; animation:none !important; }
+}
+@media (max-width:420px){
+  .masthead-title{ font-size:52px; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- LAUNCHER -->
+  <div id="launcher" class="launcher">
+    <div class="launcher-inner">
+      <div class="masthead">
+        <span class="masthead-kicker">TAP · LEARN · KEEP READING</span>
+        <h1 class="masthead-title">Shabd</h1>
+        <p class="masthead-tagline">A newspaper reader with a dictionary built in. Tap any hard word without ever leaving the page.</p>
+      </div>
+
+      <div class="launch-actions">
+        <label class="launch-card" for="fileInput">
+          <span class="launch-card-title">Open a PDF</span>
+          <span class="launch-card-sub">From your downloads or files — always works</span>
+        </label>
+        <input type="file" id="fileInput" accept="application/pdf" hidden />
+        <div class="launch-card" id="urlCardTrigger">
+          <span class="launch-card-title">Paste a link instead</span>
+          <span class="launch-card-sub">Direct PDF URL</span>
+        </div>
+      </div>
+
+      <div id="urlBox" class="url-box" hidden>
+        <input id="urlInput" type="url" placeholder="https://…/newspaper.pdf" />
+        <button id="urlLoadBtn">Open</button>
+      </div>
+
+      <div class="launcher-features">
+        <div class="lf-row"><span class="lf-num">01</span><div><b>Tap any word</b> on the page — no long-press, no switching apps.</div></div>
+        <div class="lf-row"><span class="lf-num">02</span><div>See <b>similar English meanings</b>, the <b>Hindi meaning</b>, and a <b>fresh example sentence</b> in one card.</div></div>
+        <div class="lf-row"><span class="lf-num">03</span><div>The page stays <b>full screen</b> the whole time — your place is never lost.</div></div>
+      </div>
+
+      <p class="launcher-note">Tip: Google Drive's "download" links are usually blocked from loading directly in a browser tab for security reasons. Download the PDF from Drive once, then use "Open a PDF" above — that always works.</p>
+    </div>
+  </div>
+
+  <!-- TOOLBAR -->
+  <div id="toolbar" class="toolbar">
+    <button id="backBtn" class="tbtn" title="Open another PDF">‹ Files</button>
+    <div class="tbtn-group">
+      <button id="prevBtn" class="tbtn" title="Previous page">‹</button>
+      <span id="pageIndicator" class="page-indicator">1 / 1</span>
+      <button id="nextBtn" class="tbtn" title="Next page">›</button>
+    </div>
+    <div class="tbtn-group">
+      <button id="zoomOutBtn" class="tbtn" title="Zoom out">–</button>
+      <button id="fitBtn" class="tbtn" title="Fit to width">Fit</button>
+      <button id="zoomInBtn" class="tbtn" title="Zoom in">+</button>
+    </div>
+    <div class="spacer"></div>
+    <div class="tbtn-group theme-group">
+      <button class="tbtn theme-dot paper" data-theme="paper" title="Paper"></button>
+      <button class="tbtn theme-dot bright" data-theme="bright" title="Bright"></button>
+      <button class="tbtn theme-dot night" data-theme="night" title="Night"></button>
+    </div>
+    <button id="fullscreenBtn" class="tbtn" title="Fullscreen">⛶</button>
+  </div>
+
+  <!-- VIEWER -->
+  <div id="scrollArea" class="scroll-area" hidden>
+    <div id="pageWrap" class="page-wrap">
+      <canvas id="pdfCanvas"></canvas>
+      <div id="textLayer" class="text-layer"></div>
+    </div>
+  </div>
+
+  <!-- WORD CARD -->
+  <div id="wordCard" class="word-card" hidden>
+    <button class="word-card-close" id="wcClose" aria-label="Close">&times;</button>
+    <div class="word-card-head"><span id="wcWord" class="wc-word"></span></div>
+    <div id="wcBody" class="word-card-body"></div>
+  </div>
+
+  <!-- OVERLAYS -->
+  <div id="loadingOverlay" class="loading-overlay" hidden>
+    <div class="spinner-lg"></div>
+    <div id="loadingLabel">Opening your PDF…</div>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script type="module">
+// pdf.js 5.x ships as pure ES modules and needs a MODULE worker
+// (`new Worker(url, {type:'module'})`). A lot of embedded/older Android
+// WebViews (the kind used inside third-party apps) don't support module
+// workers at all — the worker silently never starts, task.promise never
+// resolves, and the app sits on "Opening your PDF…" forever with no error
+// to catch.
+//
+// pdf.js 3.11.174 is the last line built as a classic UMD bundle with a
+// classic (non-module) worker script. Classic Worker support is close to
+// universal, even in older/embedded WebViews, so this is the safer choice
+// in an environment we don't fully control. It's loaded above via a plain
+// <script> tag (executes before this deferred module script), which
+// exposes a global `pdfjsLib`.
+const pdfjsLib = window.pdfjsLib;
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+/* ---------------------------------------------------------------- *
+ *  Element refs
+ * ---------------------------------------------------------------- */
+const launcher = document.getElementById('launcher');
+const fileInput = document.getElementById('fileInput');
+const urlCardTrigger = document.getElementById('urlCardTrigger');
+const urlBox = document.getElementById('urlBox');
+const urlInput = document.getElementById('urlInput');
+const urlLoadBtn = document.getElementById('urlLoadBtn');
+
+const toolbar = document.getElementById('toolbar');
+const backBtn = document.getElementById('backBtn');
+const prevBtn = document.getElementById('prevBtn');
+const nextBtn = document.getElementById('nextBtn');
+const pageIndicator = document.getElementById('pageIndicator');
+const zoomInBtn = document.getElementById('zoomInBtn');
+const zoomOutBtn = document.getElementById('zoomOutBtn');
+const fitBtn = document.getElementById('fitBtn');
+const fullscreenBtn = document.getElementById('fullscreenBtn');
+
+const scrollArea = document.getElementById('scrollArea');
+const pageWrap = document.getElementById('pageWrap');
+const canvas = document.getElementById('pdfCanvas');
+const textLayerDiv = document.getElementById('textLayer');
+
+const wordCard = document.getElementById('wordCard');
+const wcClose = document.getElementById('wcClose');
+const wcWord = document.getElementById('wcWord');
+const wcBody = document.getElementById('wcBody');
+
+const loadingOverlay = document.getElementById('loadingOverlay');
+const loadingLabel = document.getElementById('loadingLabel');
+const toast = document.getElementById('toast');
+
+/* ---------------------------------------------------------------- *
+ *  State
+ * ---------------------------------------------------------------- */
+let pdfDoc = null;
+let currentPage = 1;
+let totalPages = 1;
+let scale = 1;
+let userZoomed = false;
+let renderTask = null;
+let lastWord = '', lastContext = '', lastSpanEl = null;
+const DPR = Math.min(window.devicePixelRatio || 1, 2);
+const measureCanvas = document.createElement('canvas');
+const measureCtx = measureCanvas.getContext('2d');
+const memCache = new Map();
+
+/* ---------------------------------------------------------------- *
+ *  Small helpers
+ * ---------------------------------------------------------------- */
+function escapeHtml(str){
+  return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
+let toastTimer;
+function showToast(msg, ms=4200){
+  toast.textContent = msg;
+  toast.hidden = false;
+  requestAnimationFrame(()=>toast.classList.add('show'));
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>{ toast.classList.remove('show'); setTimeout(()=>toast.hidden=true,200); }, ms);
+}
+async function getPref(key){
+  try{ const r = await window.storage.get('prefs:'+key); return r ? r.value : null; }catch(e){ return null; }
+}
+async function setPref(key, val){
+  try{ await window.storage.set('prefs:'+key, val); }catch(e){}
+}
+
+/* ---------------------------------------------------------------- *
+ *  2x2 affine transform multiply — matches PDF's [a b c d e f] convention
+ * ---------------------------------------------------------------- */
+function mat2mul(a, b){
+  return [
+    a[0]*b[0] + a[2]*b[1],
+    a[1]*b[0] + a[3]*b[1],
+    a[0]*b[2] + a[2]*b[3],
+    a[1]*b[2] + a[3]*b[3],
+    a[0]*b[4] + a[2]*b[5] + a[4],
+    a[1]*b[4] + a[3]*b[5] + a[5],
+  ];
+}
+
+/* ---------------------------------------------------------------- *
+ *  Loading a PDF
+ * ---------------------------------------------------------------- */
+async function loadPdfFromArrayBuffer(buf, name){
+  loadingLabel.textContent = 'Opening ' + (name || 'your PDF') + '…';
+  loadingOverlay.hidden = false;
+
+  // If a previous document is still loaded, tear it down properly first —
+  // leaving an old worker/document alive is a common cause of a second
+  // load silently hanging or corrupting state.
+  if(renderTask){ try{ renderTask.cancel(); }catch(e){} renderTask = null; }
+  if(pdfDoc){ try{ await pdfDoc.destroy(); }catch(e){} pdfDoc = null; }
+
+  try{
+    const task = pdfjsLib.getDocument({ data: buf });
+    task.onProgress = (p)=>{
+      if(p && p.total){
+        const pct = Math.min(100, Math.round((p.loaded / p.total) * 100));
+        loadingLabel.textContent = `Opening ${name || 'your PDF'}… ${pct}%`;
+      }
+    };
+    const timeout = new Promise((_, reject)=>setTimeout(()=>reject(new Error('timeout')), 25000));
+    pdfDoc = await Promise.race([task.promise, timeout]);
+    totalPages = pdfDoc.numPages;
+    currentPage = 1;
+    userZoomed = false;
+    switchToViewer();
+    await renderPage(currentPage);
+    maybeShowFirstRunTip();
+  }catch(err){
+    console.error(err);
+    if(err && err.message === 'timeout'){
+      showToast("This PDF is taking unusually long to open. Reload the page and try again — very large scans can be slow.", 6500);
+    }else{
+      showToast("Couldn't open this PDF — it may be corrupted or password protected.");
+    }
+  }finally{
+    loadingOverlay.hidden = true;
+  }
+}
+
+fileInput.addEventListener('change', async (e)=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  const buf = await file.arrayBuffer();
+  loadPdfFromArrayBuffer(buf, file.name);
+});
+
+urlCardTrigger.addEventListener('click', ()=>{
+  urlBox.hidden = !urlBox.hidden;
+  if(!urlBox.hidden) urlInput.focus();
+});
+
+async function loadFromUrl(rawUrl){
+  const url = (rawUrl||'').trim();
+  if(!url) return;
+  loadingLabel.textContent = 'Fetching PDF…';
+  loadingOverlay.hidden = false;
+  try{
+    let fetchUrl = url;
+    const driveMatch = url.match(/drive\.google\.com\/file\/d\/([^/]+)/);
+    if(driveMatch) fetchUrl = `https://drive.google.com/uc?export=download&id=${driveMatch[1]}`;
+    const resp = await fetch(fetchUrl);
+    if(!resp.ok) throw new Error('HTTP ' + resp.status);
+    const buf = await resp.arrayBuffer();
+    await loadPdfFromArrayBuffer(buf, url.split('/').pop());
+  }catch(err){
+    console.error(err);
+    showToast("Couldn't load that link directly — this is usually the site blocking cross-site access. Download the PDF and use \"Open a PDF\" instead.", 6000);
+  }finally{
+    loadingOverlay.hidden = true;
+  }
+}
+urlLoadBtn.addEventListener('click', ()=>loadFromUrl(urlInput.value));
+urlInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter') loadFromUrl(urlInput.value); });
+
+/* ---------------------------------------------------------------- *
+ *  View switching
+ * ---------------------------------------------------------------- */
+function switchToViewer(){
+  launcher.hidden = true;
+  scrollArea.hidden = false;
+  bumpToolbar();
+}
+function switchToLauncher(){
+  scrollArea.hidden = true;
+  toolbar.classList.remove('visible');
+  launcher.hidden = false;
+  pdfDoc = null;
+  hideCard();
+}
+backBtn.addEventListener('click', switchToLauncher);
+
+async function maybeShowFirstRunTip(){
+  const seen = await getPref('seenTip');
+  if(!seen){
+    showToast('Tip: tap any word on the page to see its meaning.', 5000);
+    setPref('seenTip', '1');
+  }
+}
+
+/* ---------------------------------------------------------------- *
+ *  Toolbar auto-hide
+ * ---------------------------------------------------------------- */
+let hideTimer;
+function bumpToolbar(){
+  toolbar.classList.add('visible');
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(()=>toolbar.classList.remove('visible'), 3200);
+}
+scrollArea.addEventListener('click', (e)=>{
+  if(e.target === scrollArea || e.target === pageWrap || e.target === canvas){
+    toolbar.classList.contains('visible') ? toolbar.classList.remove('visible') : bumpToolbar();
+  }
+});
+toolbar.addEventListener('pointerdown', bumpToolbar);
+
+/* ---------------------------------------------------------------- *
+ *  Rendering
+ * ---------------------------------------------------------------- */
+async function renderPage(num){
+  const page = await pdfDoc.getPage(num);
+
+  if(!userZoomed){
+    const base = page.getViewport({ scale: 1 });
+    const availWidth = scrollArea.clientWidth - 28;
+    scale = Math.max(0.3, availWidth / base.width);
+  }
+  const viewport = page.getViewport({ scale });
+
+  canvas.width = Math.floor(viewport.width * DPR);
+  canvas.height = Math.floor(viewport.height * DPR);
+  canvas.style.width = viewport.width + 'px';
+  canvas.style.height = viewport.height + 'px';
+  pageWrap.style.width = viewport.width + 'px';
+  pageWrap.style.height = viewport.height + 'px';
+
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+  if(renderTask){ try{ renderTask.cancel(); }catch(e){} }
+  renderTask = page.render({ canvasContext: ctx, viewport });
+  try{ await renderTask.promise; }catch(e){ /* cancelled render, ignore */ }
+
+  textLayerDiv.style.width = viewport.width + 'px';
+  textLayerDiv.style.height = viewport.height + 'px';
+  textLayerDiv.innerHTML = '';
+  const textContent = await page.getTextContent();
+  buildWordSpans(textContent, viewport, textLayerDiv);
+
+  pageIndicator.textContent = `${num} / ${totalPages}`;
+  hideCard();
+}
+
+function mapFontFamily(f){ return f || 'sans-serif'; }
+
+function buildWordSpans(textContent, viewport, container){
+  const items = textContent.items;
+  const styles = textContent.styles || {};
+  const frag = document.createDocumentFragment();
+
+  for(let i=0; i<items.length; i++){
+    const item = items[i];
+    if(!item.str || !item.str.trim()) continue;
+
+    const tx = mat2mul(viewport.transform, item.transform);
+    const angle = Math.atan2(tx[1], tx[0]);
+    const fontHeight = Math.hypot(tx[2], tx[3]) || 10;
+    const styleInfo = styles[item.fontName] || {};
+    const fontFamily = mapFontFamily(styleInfo.fontFamily);
+    const itemWidthPx = (item.width || 0) * viewport.scale;
+    const ascent = fontHeight * 0.82;
+
+    let left, top;
+    if(Math.abs(angle) < 0.01){
+      left = tx[4];
+      top = tx[5] - ascent;
+    }else{
+      left = tx[4] + ascent * Math.sin(angle);
+      top = tx[5] - ascent * Math.cos(angle);
+    }
+
+    const prevStr = items[i-1]?.str || '';
+    const nextStr = items[i+1]?.str || '';
+    const context = (prevStr + ' ' + item.str + ' ' + nextStr).trim().slice(0, 220);
+
+    const tokens = item.str.split(/(\s+)/).filter(Boolean);
+    measureCtx.font = `${Math.max(fontHeight,6)}px ${fontFamily}`;
+    const measured = tokens.map(t => measureCtx.measureText(t).width || (t.length * fontHeight * 0.5));
+    const totalMeasured = measured.reduce((a,b)=>a+b, 0) || 1;
+    const norm = itemWidthPx > 0 ? itemWidthPx / totalMeasured : 1;
+
+    let cursor = 0;
+    for(let j=0; j<tokens.length; j++){
+      const tok = tokens[j];
+      const w = measured[j] * norm;
+      if(tok.trim()){
+        const wx = left + cursor * Math.cos(angle);
+        const wy = top + cursor * Math.sin(angle);
+        const span = document.createElement('span');
+        span.className = 'word';
+        span.textContent = tok;
+        span.style.left = wx + 'px';
+        span.style.top = wy + 'px';
+        span.style.width = Math.max(w, 3) + 'px';
+        span.style.height = fontHeight + 'px';
+        span.style.fontSize = fontHeight + 'px';
+        span.style.fontFamily = fontFamily;
+        if(Math.abs(angle) > 0.01) span.style.transform = `rotate(${angle}rad)`;
+        span.dataset.context = context;
+        frag.appendChild(span);
+      }
+      cursor += w;
+    }
+  }
+  container.appendChild(frag);
+}
+
+textLayerDiv.addEventListener('click', (e)=>{
+  const span = e.target.closest('.word');
+  if(!span) return;
+  e.stopPropagation();
+  onWordClick(span.textContent, span.dataset.context || '', span);
+});
+
+/* ---------------------------------------------------------------- *
+ *  Word lookups
+ * ---------------------------------------------------------------- */
+function cleanWord(raw){
+  return raw.replace(/^[^A-Za-z]+/, '').replace(/[^A-Za-z]+$/, '');
+}
+
+async function getCached(word){
+  const k = word.toLowerCase();
+  if(memCache.has(k)) return memCache.get(k);
+  try{
+    const res = await window.storage.get('word:' + k);
+    if(res && res.value){
+      const parsed = JSON.parse(res.value);
+      memCache.set(k, parsed);
+      return parsed;
+    }
+  }catch(e){ /* miss */ }
+  return null;
+}
+async function setCached(word, data){
+  const k = word.toLowerCase();
+  memCache.set(k, data);
+  try{ await window.storage.set('word:' + k, JSON.stringify(data)); }catch(e){}
+}
+
+async function fetchWordInfo(word, context){
+  // Try the AI lookup first — it gives context-aware, disambiguated
+  // meanings. This only succeeds when running inside Claude.ai's own
+  // artifact preview (which injects the API key for you) or if you've
+  // wired up your own authenticated proxy. Anywhere else it'll fail with
+  // a 401/CORS error, which we treat as a normal fallback trigger, not
+  // an error state shown to the user.
+  try{
+    const data = await fetchWordInfoAI(word, context);
+    if(data && Array.isArray(data.meanings) && data.meanings.length) return data;
+    throw new Error('AI response missing meanings');
+  }catch(err){
+    console.warn('AI lookup unavailable, falling back to public dictionary APIs:', err.message);
+    return await fetchWordInfoPublic(word, context);
+  }
+}
+
+async function fetchWordInfoAI(word, context){
+  const sys = `You are a dictionary embedded in a newspaper reading app for an Indian English-learning reader.
+Reply with ONLY a raw JSON object — no markdown fences, no commentary — in exactly this shape:
+{"word":"<cleaned word>","meanings":["...","...","..."],"hindi":"...","example":"..."}
+Rules:
+- "meanings": 2 to 4 short, simple English synonyms or a plain everyday phrase, matching the sense the word has in the given context.
+- "hindi": the Hindi meaning in Devanagari script, 1-3 common translations separated by commas.
+- "example": one natural new English sentence (do not copy the given context) using the word clearly, 8-16 words.
+Use the context to disambiguate. If it's a proper noun or unusual token, still do your best.`;
+  const userMsg = `Word: "${word}"\nContext: "${context}"`;
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1000,
+      system: sys,
+      messages: [{ role: 'user', content: userMsg }]
+    })
+  });
+  if(!resp.ok) throw new Error('AI HTTP ' + resp.status);
+  const data = await resp.json();
+  const text = (data.content || []).filter(b=>b.type==='text').map(b=>b.text).join('\n');
+  const clean = text.replace(/```json|```/g, '').trim();
+  return JSON.parse(clean);
+}
+
+// Keyless, CORS-open public APIs: dictionaryapi.dev for English
+// meanings/example, MyMemory for the Hindi translation. No account, no
+// key, no backend — works from any static host.
+async function fetchWordInfoPublic(word, context){
+  const [defResult, hindiResult] = await Promise.allSettled([
+    fetchPublicDefinition(word),
+    fetchHindiTranslation(word)
+  ]);
+
+  const def = defResult.status === 'fulfilled' ? defResult.value : { meanings: [], example: '' };
+  const meanings = def.meanings.length ? def.meanings : [word];
+  const example = def.example || context || `Try using "${word}" in a sentence of your own.`;
+  const hindi = hindiResult.status === 'fulfilled' ? hindiResult.value : '—';
+
+  return { word, meanings, hindi, example };
+}
+
+async function fetchPublicDefinition(word){
+  const resp = await fetch('https://api.dictionaryapi.dev/api/v2/entries/en/' + encodeURIComponent(word.toLowerCase()));
+  if(!resp.ok) throw new Error('dictionary HTTP ' + resp.status);
+  const data = await resp.json();
+  const meanings = [];
+  let example = '';
+  const entry = data[0];
+  if(entry && Array.isArray(entry.meanings)){
+    outer:
+    for(const m of entry.meanings){
+      for(const def of (m.definitions || [])){
+        if(Array.isArray(def.synonyms) && def.synonyms.length){
+          for(const syn of def.synonyms){
+            if(meanings.length < 4 && !meanings.includes(syn)) meanings.push(syn);
+          }
+        }else if(def.definition && meanings.length < 4){
+          meanings.push(def.definition.split(';')[0].split(',')[0].slice(0, 60));
+        }
+        if(!example && def.example) example = def.example;
+        if(meanings.length >= 4 && example) break outer;
+      }
+    }
+  }
+  return { meanings: meanings.slice(0, 4), example };
+}
+
+async function fetchHindiTranslation(word){
+  const resp = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(word)}&langpair=en|hi`);
+  if(!resp.ok) throw new Error('translate HTTP ' + resp.status);
+  const data = await resp.json();
+  const text = data && data.responseData && data.responseData.translatedText;
+  return text || '—';
+}
+
+async function onWordClick(raw, context, spanEl){
+  const word = cleanWord(raw);
+  if(!word || word.length < 2) return;
+
+  document.querySelectorAll('.word.active-word').forEach(s=>s.classList.remove('active-word'));
+  spanEl.classList.add('active-word');
+  lastWord = word; lastContext = context; lastSpanEl = spanEl;
+
+  positionCardNear(spanEl);
+  showCardLoading(word);
+
+  let data = await getCached(word);
+  if(!data){
+    try{
+      data = await fetchWordInfo(word, context);
+      setCached(word, data);
+    }catch(err){
+      console.error(err);
+      showCardError(word);
+      return;
+    }
+  }
+  if(word === lastWord){
+    showCardData(data);
+    positionCardNear(spanEl);
+  }
+}
+
+function showCardLoading(word){
+  wcWord.textContent = word.toLowerCase();
+  wcBody.innerHTML = `<div class="wc-loading"><span class="wc-spinner"></span>looking it up…</div>`;
+  wordCard.hidden = false;
+  requestAnimationFrame(()=>wordCard.classList.add('show'));
+}
+function showCardData(data){
+  wcWord.textContent = (data.word || wcWord.textContent).toLowerCase();
+  const meanings = (data.meanings || []).slice(0,4);
+  wcBody.innerHTML = `
+    <div class="wc-section">
+      <div class="wc-label">Similar meanings</div>
+      <div class="wc-chips">${meanings.map(m=>`<span class="wc-chip">${escapeHtml(m)}</span>`).join('')}</div>
+    </div>
+    <div class="wc-section">
+      <div class="wc-label">Hindi meaning</div>
+      <div class="wc-hindi">${escapeHtml(data.hindi || '—')}</div>
+    </div>
+    <div class="wc-section">
+      <div class="wc-label">Example</div>
+      <div class="wc-example">${escapeHtml(data.example || '')}</div>
+    </div>`;
+}
+function showCardError(word){
+  wcBody.innerHTML = `<div class="wc-error">Couldn't fetch a meaning for this word — check your connection.<br><button class="wc-retry" id="wcRetry">Try again</button></div>`;
+  document.getElementById('wcRetry').addEventListener('click', ()=>onWordClick(word, lastContext, lastSpanEl));
+}
+
+function positionCardNear(spanEl){
+  const rect = spanEl.getBoundingClientRect();
+  wordCard.classList.remove('show');
+  wordCard.hidden = false;
+  requestAnimationFrame(()=>{
+    const cw = wordCard.offsetWidth || 280;
+    const ch = wordCard.offsetHeight || 170;
+    let x = rect.left + rect.width/2 - cw/2;
+    x = Math.max(12, Math.min(window.innerWidth - cw - 12, x));
+    let y = rect.bottom + 12;
+    let arrowTop = true;
+    if(y + ch > window.innerHeight - 12){
+      y = rect.top - ch - 12;
+      arrowTop = false;
+    }
+    y = Math.max(8, y);
+    wordCard.style.left = x + 'px';
+    wordCard.style.top = y + 'px';
+    wordCard.classList.toggle('arrow-top', arrowTop);
+    wordCard.classList.toggle('arrow-bottom', !arrowTop);
+    const arrowX = Math.max(16, Math.min(cw-16, rect.left + rect.width/2 - x));
+    wordCard.style.setProperty('--arrow-x', arrowX + 'px');
+    wordCard.classList.add('show');
+  });
+}
+function hideCard(){
+  wordCard.classList.remove('show');
+  document.querySelectorAll('.word.active-word').forEach(s=>s.classList.remove('active-word'));
+  setTimeout(()=>{ if(!wordCard.classList.contains('show')) wordCard.hidden = true; }, 160);
+}
+wcClose.addEventListener('click', hideCard);
+document.addEventListener('click', (e)=>{
+  if(!wordCard.hidden && !wordCard.contains(e.target) && !e.target.closest('.word')){
+    hideCard();
+  }
+});
+document.addEventListener('keydown', (e)=>{ if(e.key === 'Escape') hideCard(); });
+
+/* ---------------------------------------------------------------- *
+ *  Navigation
+ * ---------------------------------------------------------------- */
+prevBtn.addEventListener('click', ()=>{ if(currentPage>1){ currentPage--; renderPage(currentPage); } });
+nextBtn.addEventListener('click', ()=>{ if(currentPage<totalPages){ currentPage++; renderPage(currentPage); } });
+
+document.addEventListener('keydown', (e)=>{
+  if(scrollArea.hidden) return;
+  if(e.ctrlKey || e.metaKey || e.altKey) return;
+  if(e.key==='ArrowRight') nextBtn.click();
+  if(e.key==='ArrowLeft') prevBtn.click();
+  if(e.key==='+' || e.key==='=') zoomInBtn.click();
+  if(e.key==='-') zoomOutBtn.click();
+  if(e.key==='f' || e.key==='F') fullscreenBtn.click();
+});
+
+// swipe navigation (only when the page isn't already scrolled horizontally by zoom)
+let touchStartX=0, touchStartY=0;
+scrollArea.addEventListener('touchstart', (e)=>{
+  touchStartX = e.touches[0].clientX; touchStartY = e.touches[0].clientY;
+}, {passive:true});
+scrollArea.addEventListener('touchend', (e)=>{
+  const dx = e.changedTouches[0].clientX - touchStartX;
+  const dy = e.changedTouches[0].clientY - touchStartY;
+  const canScrollH = scrollArea.scrollWidth > scrollArea.clientWidth + 2;
+  if(canScrollH) return;
+  if(Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.6){
+    if(dx < 0) nextBtn.click(); else prevBtn.click();
+  }
+}, {passive:true});
+
+/* ---------------------------------------------------------------- *
+ *  Zoom
+ * ---------------------------------------------------------------- */
+function setZoom(newScale){
+  scale = Math.min(4, Math.max(0.3, newScale));
+  userZoomed = true;
+  renderPage(currentPage);
+}
+zoomInBtn.addEventListener('click', ()=>setZoom(scale * 1.2));
+zoomOutBtn.addEventListener('click', ()=>setZoom(scale / 1.2));
+fitBtn.addEventListener('click', ()=>{ userZoomed = false; renderPage(currentPage); });
+
+let lastTap = 0;
+pageWrap.addEventListener('dblclick', (e)=>{
+  if(e.target.closest('.word')) return;
+  userZoomed ? (userZoomed=false, renderPage(currentPage)) : setZoom(scale*1.8);
+});
+
+window.addEventListener('resize', debounce(()=>{
+  if(!userZoomed && pdfDoc) renderPage(currentPage);
+}, 200));
+
+/* ---------------------------------------------------------------- *
+ *  Fullscreen
+ * ---------------------------------------------------------------- */
+fullscreenBtn.addEventListener('click', async ()=>{
+  try{
+    if(!document.fullscreenElement){ await document.documentElement.requestFullscreen(); }
+    else{ await document.exitFullscreen(); }
+  }catch(e){
+    showToast('Fullscreen isn\u2019t available here — the reader already fills the screen edge to edge.');
+  }
+});
+
+/* ---------------------------------------------------------------- *
+ *  Theme
+ * ---------------------------------------------------------------- */
+function applyTheme(theme){
+  document.documentElement.setAttribute('data-theme', theme);
+  document.querySelectorAll('.theme-dot').forEach(b=>b.classList.toggle('active', b.dataset.theme===theme));
+}
+document.querySelectorAll('.theme-dot').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    applyTheme(btn.dataset.theme);
+    setPref('theme', btn.dataset.theme);
+  });
+});
+(async ()=>{
+  const saved = await getPref('theme');
+  applyTheme(saved || 'paper');
+})();
+</script>
+</body>
+</html>
