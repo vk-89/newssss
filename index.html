@@ -33,6 +33,15 @@
 }
 
 *{ box-sizing:border-box; }
+
+/* Several elements below use `display:flex` in their own class rules,
+   which — per normal CSS cascade — silently overrides the browser's
+   built-in `[hidden]{ display:none }` behavior. That left the loading
+   overlay (and the launcher/viewer underneath it) permanently visible
+   regardless of the `.hidden` property being toggled in JS. This rule
+   forces `hidden` to always win. */
+[hidden]{ display:none !important; }
+
 html,body{
   margin:0; padding:0; height:100vh; height:100dvh; overflow:hidden;
   background:var(--bg); color:var(--ink); font-family:var(--font-ui);
