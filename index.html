@@ -264,23 +264,38 @@ button{ font-family:inherit; }
 
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" onerror="window.__pdfjsLoadFailed = true;"></script>
 <script type="module">
-// pdf.js 5.x ships as pure ES modules and needs a MODULE worker
-// (`new Worker(url, {type:'module'})`). A lot of embedded/older Android
-// WebViews (the kind used inside third-party apps) don't support module
-// workers at all — the worker silently never starts, task.promise never
-// resolves, and the app sits on "Opening your PDF…" forever with no error
-// to catch.
-//
-// pdf.js 3.11.174 is the last line built as a classic UMD bundle with a
-// classic (non-module) worker script. Classic Worker support is close to
-// universal, even in older/embedded WebViews, so this is the safer choice
-// in an environment we don't fully control. It's loaded above via a plain
-// <script> tag (executes before this deferred module script), which
-// exposes a global `pdfjsLib`.
+/* ---------------------------------------------------------------- *
+ *  EARLY DIAGNOSTICS
+ *  This app is developed/tested on a mobile device with no console
+ *  access, so instead of guessing at failure causes we surface the
+ *  real error directly on screen — screenshot whatever this shows.
+ * ---------------------------------------------------------------- */
+const __toastEl = document.getElementById('toast');
+function __earlyToast(msg, ms=10000){
+  console.error(msg);
+  __toastEl.textContent = msg;
+  __toastEl.hidden = false;
+  requestAnimationFrame(()=>__toastEl.classList.add('show'));
+  clearTimeout(__earlyToast._t);
+  __earlyToast._t = setTimeout(()=>{ __toastEl.classList.remove('show'); setTimeout(()=>__toastEl.hidden=true,200); }, ms);
+}
+window.addEventListener('error', (e)=>{
+  __earlyToast('JS error: ' + (e.message || (e.error && e.error.message) || 'unknown error'));
+});
+window.addEventListener('unhandledrejection', (e)=>{
+  const reason = e.reason;
+  __earlyToast('Unhandled promise rejection: ' + (reason && reason.message ? reason.message : String(reason)));
+});
+
+if(window.__pdfjsLoadFailed || typeof window.pdfjsLib === 'undefined'){
+  __earlyToast('pdf.js failed to load from cdnjs.cloudflare.com. Check your internet connection — if you\'re online, your browser/app may be blocking that CDN.', 15000);
+}
 const pdfjsLib = window.pdfjsLib;
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+if(pdfjsLib && pdfjsLib.GlobalWorkerOptions){
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
 
 /* ---------------------------------------------------------------- *
  *  Element refs
@@ -371,16 +386,19 @@ function mat2mul(a, b){
  *  Loading a PDF
  * ---------------------------------------------------------------- */
 async function loadPdfFromArrayBuffer(buf, name){
-  loadingLabel.textContent = 'Opening ' + (name || 'your PDF') + '…';
+  if(!pdfjsLib){
+    showToast('pdf.js never loaded — this page can\'t open PDFs right now. Check your connection and reload.', 12000);
+    return;
+  }
+
+  loadingLabel.textContent = 'Starting PDF engine…';
   loadingOverlay.hidden = false;
 
-  // If a previous document is still loaded, tear it down properly first —
-  // leaving an old worker/document alive is a common cause of a second
-  // load silently hanging or corrupting state.
   if(renderTask){ try{ renderTask.cancel(); }catch(e){} renderTask = null; }
   if(pdfDoc){ try{ await pdfDoc.destroy(); }catch(e){} pdfDoc = null; }
 
   try{
+    loadingLabel.textContent = 'Opening ' + (name || 'your PDF') + '…';
     const task = pdfjsLib.getDocument({ data: buf });
     task.onProgress = (p)=>{
       if(p && p.total){
@@ -388,8 +406,10 @@ async function loadPdfFromArrayBuffer(buf, name){
         loadingLabel.textContent = `Opening ${name || 'your PDF'}… ${pct}%`;
       }
     };
-    const timeout = new Promise((_, reject)=>setTimeout(()=>reject(new Error('timeout')), 25000));
+    const timeout = new Promise((_, reject)=>setTimeout(()=>reject(new Error('timeout: getDocument did not resolve within 25s')), 25000));
     pdfDoc = await Promise.race([task.promise, timeout]);
+
+    loadingLabel.textContent = 'Rendering page 1…';
     totalPages = pdfDoc.numPages;
     currentPage = 1;
     userZoomed = false;
@@ -398,10 +418,11 @@ async function loadPdfFromArrayBuffer(buf, name){
     maybeShowFirstRunTip();
   }catch(err){
     console.error(err);
-    if(err && err.message === 'timeout'){
-      showToast("This PDF is taking unusually long to open. Reload the page and try again — very large scans can be slow.", 6500);
+    const detail = (err && err.message) ? err.message : String(err);
+    if(detail.startsWith('timeout')){
+      showToast("Stuck opening this PDF for 25+ seconds: " + detail, 9000);
     }else{
-      showToast("Couldn't open this PDF — it may be corrupted or password protected.");
+      showToast("Couldn't open this PDF — " + detail, 9000);
     }
   }finally{
     loadingOverlay.hidden = true;
@@ -409,10 +430,15 @@ async function loadPdfFromArrayBuffer(buf, name){
 }
 
 fileInput.addEventListener('change', async (e)=>{
-  const file = e.target.files[0];
-  if(!file) return;
-  const buf = await file.arrayBuffer();
-  loadPdfFromArrayBuffer(buf, file.name);
+  try{
+    const file = e.target.files[0];
+    if(!file) return;
+    const buf = await file.arrayBuffer();
+    loadPdfFromArrayBuffer(buf, file.name);
+  }catch(err){
+    console.error(err);
+    showToast('Could not read the selected file: ' + (err && err.message ? err.message : err), 9000);
+  }
 });
 
 urlCardTrigger.addEventListener('click', ()=>{
