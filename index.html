@@ -305,6 +305,9 @@ let startX = 0, startY = 0;
 let scrollStartX = 0, scrollStartY = 0;
 let initialPinchDist = 0;
 let initialScale = 1;
+let renderedScale = 1;      // scale actually baked into the canvas/text layer right now
+let pinchOriginX = 0, pinchOriginY = 0; // pinch midpoint, relative to pageWrap
+let renderGen = 0;          // guards against overlapping/late renders
 
 const DPR = Math.min(window.devicePixelRatio || 1, 3);
 const measureCanvas = document.createElement('canvas');
@@ -429,7 +432,10 @@ async function loadPdfFromArrayBuffer(buf, name){
 }
 
 async function renderPage(num){
+  const myGen = ++renderGen; // any newer renderPage() call invalidates this run
   const page = await pdfDoc.getPage(num);
+  if(myGen !== renderGen) return; // superseded while awaiting the page
+
   if(!userZoomed){
     const base = page.getViewport({ scale: 1 });
     scale = Math.max(0.3, (scrollArea.clientWidth - 28) / base.width);
@@ -447,14 +453,21 @@ async function renderPage(num){
   if(renderTask){ try{ renderTask.cancel(); }catch(e){} }
   renderTask = page.render({ canvasContext: ctx, viewport });
   try{ await renderTask.promise; }catch(e){}
+  if(myGen !== renderGen) return; // a newer render took over mid-draw
 
   textLayerDiv.style.width = viewport.width + 'px';
   textLayerDiv.style.height = viewport.height + 'px';
   textLayerDiv.innerHTML = '';
   const textContent = await page.getTextContent();
+  if(myGen !== renderGen) return; // stale by the time text content arrived
   buildWordSpans(textContent, viewport, textLayerDiv);
   pageIndicator.textContent = `${num} / ${totalPages}`;
   hideCard();
+
+  // This render is now authoritative at `scale` — clear any interim CSS zoom preview
+  renderedScale = scale;
+  pageWrap.style.transform = 'none';
+  pageWrap.style.transformOrigin = '';
 }
 
 function buildWordSpans(textContent, viewport, container){
@@ -581,14 +594,56 @@ document.addEventListener('click', (e)=>{ if(!wordCard.hidden && !wordCard.conta
  * ---------------------------------------------------------------- */
 let hideTimer;
 function bumpToolbar(){ toolbar.classList.add('visible'); clearTimeout(hideTimer); hideTimer = setTimeout(()=>toolbar.classList.remove('visible'), 3200); }
-scrollArea.addEventListener('click', (e)=>{ if(e.target === scrollArea || e.target === pageWrap || e.target === canvas){ toolbar.classList.contains('visible') ? toolbar.classList.remove('visible') : bumpToolbar(); } });
+
+function toggleFullscreen(){
+  const el = document.documentElement;
+  const isFs = document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement;
+  if(!isFs){
+    const req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
+    if(req) req.call(el).catch(()=>{});
+  } else {
+    const exit = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen || document.msExitFullscreen;
+    if(exit) exit.call(document).catch(()=>{});
+  }
+}
+['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','MSFullscreenChange'].forEach(evt=>{
+  document.addEventListener(evt, ()=>{ if(pdfDoc && !userZoomed) renderPage(currentPage); });
+});
+
+// Single tap toggles the toolbar; a second tap within the window toggles fullscreen instead.
+let tapCount = 0, tapTimer = null;
+const DOUBLE_TAP_MS = 280;
+scrollArea.addEventListener('click', (e)=>{
+  if(e.target !== scrollArea && e.target !== pageWrap && e.target !== canvas) return;
+  tapCount++;
+  if(tapCount === 1){
+    tapTimer = setTimeout(()=>{
+      toolbar.classList.contains('visible') ? toolbar.classList.remove('visible') : bumpToolbar();
+      tapCount = 0;
+    }, DOUBLE_TAP_MS);
+  } else {
+    clearTimeout(tapTimer);
+    tapCount = 0;
+    toggleFullscreen();
+  }
+});
 prevBtn.addEventListener('click', ()=>{ if(currentPage>1){ currentPage--; renderPage(currentPage); } });
 nextBtn.addEventListener('click', ()=>{ if(currentPage<totalPages){ currentPage++; renderPage(currentPage); } });
 backBtn.addEventListener('click', () => { scrollArea.hidden = true; launcher.hidden = false; toolbar.classList.remove('visible'); hideCard(); pdfDoc = null; loadHubPapers(); });
 
 scrollArea.addEventListener('touchstart', (e)=>{
   if (e.touches.length === 1) { isPanning = true; startX = e.touches[0].clientX; startY = e.touches[0].clientY; scrollStartX = scrollArea.scrollLeft; scrollStartY = scrollArea.scrollTop; }
-  else if (e.touches.length === 2) { isPanning = false; initialPinchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); initialScale = scale; }
+  else if (e.touches.length === 2) {
+    isPanning = false;
+    initialPinchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+    initialScale = scale;
+    renderedScale = scale; // baseline: canvas is currently drawn at `scale`
+    const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+    const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+    const wrapRect = pageWrap.getBoundingClientRect();
+    pinchOriginX = midX - wrapRect.left;
+    pinchOriginY = midY - wrapRect.top;
+  }
 }, {passive: false});
 
 scrollArea.addEventListener('touchmove', (e)=>{
@@ -598,26 +653,52 @@ scrollArea.addEventListener('touchmove', (e)=>{
     const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
     if(initialPinchDist > 0) {
       let newScale = Math.min(4, Math.max(0.4, initialScale * (dist / initialPinchDist)));
-      if(Math.abs(newScale - scale) > 0.02) { scale = newScale; userZoomed = true; debouncedRender(); }
+      if(Math.abs(newScale - scale) > 0.01) {
+        scale = newScale;
+        userZoomed = true;
+        // Instant visual feedback via CSS transform — no re-render (and no text-layer
+        // rebuild) mid-gesture, which is what was causing the multi-second "stuck" freeze.
+        pageWrap.style.transformOrigin = `${pinchOriginX}px ${pinchOriginY}px`;
+        pageWrap.style.transform = `scale(${scale / renderedScale})`;
+      }
     }
   }
 }, {passive: false});
 
 scrollArea.addEventListener('touchend', (e)=>{
-  if(e.touches.length === 0 && initialPinchDist === 0) {
+  const wasPinching = initialPinchDist > 0;
+  if(e.touches.length === 0 && !wasPinching) {
     const dx = startX - (e.changedTouches[0]?.clientX || startX), dy = startY - (e.changedTouches[0]?.clientY || startY);
     if(scrollArea.scrollWidth <= scrollArea.clientWidth + 5 && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
       if(dx > 0) nextBtn.click(); else prevBtn.click();
     }
   }
-  if(e.touches.length < 2) initialPinchDist = 0;
+  if(e.touches.length < 2){
+    if(wasPinching){
+      // Pinch just ended: keep the point under the fingers stationary, then do the
+      // one real re-render (full-res canvas + text layer) for this whole gesture.
+      const factor = scale / renderedScale;
+      if(Math.abs(factor - 1) > 0.005){
+        scrollArea.scrollLeft += pinchOriginX * (factor - 1);
+        scrollArea.scrollTop  += pinchOriginY * (factor - 1);
+      }
+      renderPage(currentPage);
+    }
+    initialPinchDist = 0;
+  }
 }, {passive: true});
 
-const debouncedRender = debounce(() => renderPage(currentPage), 40);
-
-/* Zoom Group UI Click Bindings */
-zoomInBtn.addEventListener('click', ()=> { scale = Math.min(4, scale*1.2); userZoomed=true; renderPage(currentPage); });
-zoomOutBtn.addEventListener('click', ()=> { scale = Math.max(0.3, scale/1.2); userZoomed=true; renderPage(currentPage); });
+/* Zoom Group UI Click Bindings — instant CSS preview, then one real render */
+function stepZoom(newScale){
+  renderedScale = scale;
+  scale = newScale;
+  userZoomed = true;
+  pageWrap.style.transformOrigin = '50% 0';
+  pageWrap.style.transform = `scale(${scale / renderedScale})`;
+  renderPage(currentPage);
+}
+zoomInBtn.addEventListener('click', ()=> stepZoom(Math.min(4, scale*1.2)));
+zoomOutBtn.addEventListener('click', ()=> stepZoom(Math.max(0.3, scale/1.2)));
 fitBtn.addEventListener('click', ()=>{ userZoomed = false; renderPage(currentPage); });
 
 /* Themes initialization logic */
