@@ -110,7 +110,7 @@ button{ font-family:inherit; }
 /* ============================= VIEWER (continuous scroll) ============================= */
 .scroll-area{
   position:absolute; inset:0; overflow:auto; -webkit-overflow-scrolling:touch;
-  touch-action:pan-y; background:var(--bg); padding:56px 14px 48px;
+  touch-action:pan-x pan-y; background:var(--bg); padding:56px 14px 48px;
 }
 /* NOTE: intentionally NOT flex/justify-content:center on the scroller — that pattern
    clips the overflow on the start edge in many browsers, which is why the left side
@@ -317,7 +317,7 @@ let initialPinchDist = 0;
 let pinchStartScale = 1;
 let pinchOriginX = 0, pinchOriginY = 0; // content-local coords (relative to pagesContainer's top-left)
 
-const DPR = Math.min(window.devicePixelRatio || 1, 3);
+const DPR = Math.min(window.devicePixelRatio || 1, 2);
 const measureCanvas = document.createElement('canvas');
 const measureCtx = measureCanvas.getContext('2d');
 
@@ -472,7 +472,7 @@ async function loadPdfFromArrayBuffer(buf, name){
         const idx = parseInt(entry.target.dataset.pageNum, 10) - 1;
         const pw = pageWraps[idx];
         if(pw && (!pw.rendered || pw.renderedScale !== scale)){
-          renderPageInto(idx);
+          requestRender(idx);
         }
       });
     }, { root: scrollArea, rootMargin: '900px 0px 900px 0px', threshold: 0.01 });
@@ -484,6 +484,37 @@ async function loadPdfFromArrayBuffer(buf, name){
     showToast("Rendering engine baseline crash.");
   }finally{
     loadingOverlay.hidden = true;
+  }
+}
+
+/* ---------------------------------------------------------------- *
+ *  Render queue — caps how many pages rasterize at once. Rendering
+ *  several pages simultaneously (e.g. right after a zoom) is what was
+ *  causing the stutter; Google Drive-style smoothness comes from only
+ *  ever doing 1-2 heavy raster jobs at a time and queuing the rest.
+ * ---------------------------------------------------------------- */
+const MAX_CONCURRENT_RENDERS = 2;
+let activeRenders = 0;
+const renderQueue = [];
+
+function requestRender(idx){
+  const pw = pageWraps[idx];
+  if(!pw || pw.queued) return;
+  pw.queued = true;
+  renderQueue.push(idx);
+  pumpRenderQueue();
+}
+function pumpRenderQueue(){
+  while(activeRenders < MAX_CONCURRENT_RENDERS && renderQueue.length){
+    const idx = renderQueue.shift();
+    const pw = pageWraps[idx];
+    if(!pw) continue;
+    pw.queued = false;
+    activeRenders++;
+    renderPageInto(idx).finally(()=>{
+      activeRenders--;
+      pumpRenderQueue();
+    });
   }
 }
 
@@ -516,8 +547,11 @@ async function renderPageInto(idx){
   try{ await renderTask.promise; }catch(e){ return; }
   if(myGen !== pw.gen) return;
 
-  let textContent;
-  try{ textContent = await pdfPage.getTextContent(); }catch(e){ textContent = { items: [], styles: {} }; }
+  let textContent = pw.textContentCache;
+  if(!textContent){
+    try{ textContent = await pdfPage.getTextContent(); }catch(e){ textContent = { items: [], styles: {} }; }
+    pw.textContentCache = textContent;
+  }
   if(myGen !== pw.gen) return;
 
   const newTextLayer = document.createElement('div');
@@ -678,6 +712,7 @@ function updatePageIndicator(){
 
 scrollArea.addEventListener('scroll', debounce(()=>{
   updatePageIndicator();
+  renderStaleNearby(400);
   bumpToolbar();
 }, 60), { passive: true });
 
@@ -756,10 +791,21 @@ function commitZoomAt(oldScale, anchorX, anchorY){
 
   hideCard();
   committedScale = scale;
-  // Re-render only pages that were already rendered — keeps zoom cheap and
-  // still-offscreen pages simply pick up the new scale via the observer later.
-  pageWraps.forEach((pw, idx) => { if(pw.rendered) renderPageInto(idx); });
+  // Only force an immediate, sharp re-render for pages actually on screen right
+  // now — that's the visible jump the eye cares about. Everything else picks up
+  // the new scale lazily (via the queue) as it scrolls into view, so we never
+  // fire off a dozen simultaneous heavy re-renders at once.
+  renderStaleNearby(0);
   updatePageIndicator();
+}
+
+function renderStaleNearby(margin){
+  const areaRect = scrollArea.getBoundingClientRect();
+  pageWraps.forEach((pw, idx) => {
+    const r = pw.el.getBoundingClientRect();
+    if(r.bottom < areaRect.top - margin || r.top > areaRect.bottom + margin) return;
+    if(!pw.rendered || pw.renderedScale !== scale) requestRender(idx);
+  });
 }
 
 function recomputeFitAndApply(){
