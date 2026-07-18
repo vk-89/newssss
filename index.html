@@ -107,13 +107,27 @@ button{ font-family:inherit; }
 .toolbar .theme-dot.active{ border-color:var(--signature); border-width:2px; }
 .spacer{ flex:1; }
 
-/* ============================= VIEWER ============================= */
+/* ============================= VIEWER (continuous scroll) ============================= */
 .scroll-area{
-  position:absolute; inset:0; overflow:auto; touch-action:none; background:var(--bg);
-  display:flex; justify-content:center; padding:56px 14px 24px;
+  position:absolute; inset:0; overflow:auto; -webkit-overflow-scrolling:touch;
+  touch-action:pan-y; background:var(--bg); padding:56px 14px 48px;
 }
-.page-wrap{ position:relative; margin:0 auto; box-shadow:0 6px 24px rgba(0,0,0,.18); background:var(--canvas-frame); height:max-content; }
-#pdfCanvas{ display:block; filter:var(--canvas-filter); }
+/* NOTE: intentionally NOT flex/justify-content:center on the scroller — that pattern
+   clips the overflow on the start edge in many browsers, which is why the left side
+   became unreachable when zoomed in. Plain block layout + margin:auto per page avoids
+   that: pages center themselves when they fit, and simply left-align (fully
+   scrollable in both directions) once they're wider than the viewport. */
+.pages-container{ width:100%; }
+.page-wrap{
+  position:relative; display:block; margin:0 auto 16px; box-shadow:0 6px 24px rgba(0,0,0,.18);
+  background:var(--canvas-frame); overflow:hidden;
+}
+.page-wrap .page-num-tag{
+  position:absolute; top:8px; left:8px; font-family:var(--font-mono); font-size:10px;
+  color:var(--ink-soft); background:color-mix(in srgb, var(--bg-elevated) 80%, transparent);
+  padding:2px 6px; border-radius:4px; pointer-events:none; z-index:1;
+}
+.page-canvas{ display:block; filter:var(--canvas-filter); }
 .text-layer{ position:absolute; top:0; left:0; pointer-events:none; }
 .word{
   position:absolute; transform-origin:0 0; cursor:pointer; color:transparent;
@@ -128,7 +142,7 @@ button{ font-family:inherit; }
   padding:16px 16px 14px; opacity:0; transform:translateY(4px) scale(.98); transition:opacity .14s, transform .14s;
   pointer-events:none;
 }
-.word-card.show{ opacity:1; transform:translateY(0 scale(1); pointer-events:auto; }
+.word-card.show{ opacity:1; transform:translateY(0) scale(1); pointer-events:auto; }
 .word-card::before{
   content:''; position:absolute; left:var(--arrow-x, 24px); width:14px; height:14px;
   background:var(--card-bg); border:1px solid var(--rule); transform:translateX(-50%) rotate(45deg);
@@ -220,12 +234,9 @@ button{ font-family:inherit; }
     </div>
   </div>
 
-  <!-- VIEWER -->
+  <!-- VIEWER: continuous, all pages stacked one below another -->
   <div id="scrollArea" class="scroll-area" hidden>
-    <div id="pageWrap" class="page-wrap">
-      <canvas id="pdfCanvas"></canvas>
-      <div id="textLayer" class="text-layer"></div>
-    </div>
+    <div id="pagesContainer" class="pages-container"></div>
   </div>
 
   <!-- WORD CARD -->
@@ -278,9 +289,7 @@ const zoomInBtn = document.getElementById('zoomInBtn');
 const zoomOutBtn = document.getElementById('zoomOutBtn');
 const fitBtn = document.getElementById('fitBtn');
 const scrollArea = document.getElementById('scrollArea');
-const pageWrap = document.getElementById('pageWrap');
-const canvas = document.getElementById('pdfCanvas');
-const textLayerDiv = document.getElementById('textLayer');
+const pagesContainer = document.getElementById('pagesContainer');
 const wordCard = document.getElementById('wordCard');
 const wcClose = document.getElementById('wcClose');
 const wcWord = document.getElementById('wcWord');
@@ -293,21 +302,20 @@ const toast = document.getElementById('toast');
  *  State Variables
  * ---------------------------------------------------------------- */
 let pdfDoc = null;
-let currentPage = 1;
 let totalPages = 1;
-let scale = 1;
+let currentPage = 1;
+let scale = 1;            // scale currently being targeted (live during pinch)
+let committedScale = 1;   // scale actually baked into page-wrap sizes right now
 let userZoomed = false;
-let renderTask = null;
+
+let pageWraps = [];        // [{baseWidth,baseHeight,el,canvas,textLayer,rendered,renderedScale,gen}]
+let pageObserver = null;
+
 let lastWord = '', lastContext = '', lastSpanEl = null;
 
-let isPanning = false;
-let startX = 0, startY = 0;
-let scrollStartX = 0, scrollStartY = 0;
 let initialPinchDist = 0;
-let initialScale = 1;
-let renderedScale = 1;      // scale actually baked into the canvas/text layer right now
-let pinchOriginX = 0, pinchOriginY = 0; // pinch midpoint, relative to pageWrap
-let renderGen = 0;          // guards against overlapping/late renders
+let pinchStartScale = 1;
+let pinchOriginX = 0, pinchOriginY = 0; // content-local coords (relative to pagesContainer's top-left)
 
 const DPR = Math.min(window.devicePixelRatio || 1, 3);
 const measureCanvas = document.createElement('canvas');
@@ -333,7 +341,7 @@ async function loadHubPapers() {
     hubList.innerHTML = '';
     data.forEach(file => {
       if(file.name === '.emptyFolderPlaceholder') return;
-      
+
       const date = new Date(file.created_at).toLocaleDateString(undefined, {month:'short', day:'numeric'});
       const item = document.createElement('div');
       item.className = 'hub-item';
@@ -367,20 +375,19 @@ async function fetchAndLoadCloudFile(fileName) {
 fileInput.addEventListener('change', async (e)=>{
   const file = e.target.files[0];
   if(!file) return;
-  
+
   loadingLabel.textContent = 'Uploading to dashboard...';
   loadingOverlay.hidden = false;
-  
+
   try {
-    // Unique naming logic cleanups
     const uniqueName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_')}`;
     const { error } = await supabase.storage.from(BUCKET_NAME).upload(uniqueName, file);
     if (error) throw error;
-    
+
     showToast("Upload Successful!");
     const buf = await file.arrayBuffer();
     await loadPdfFromArrayBuffer(buf, file.name);
-    loadHubPapers(); 
+    loadHubPapers();
   } catch (err) {
     console.error(err);
     showToast("Upload error. Confirm storage config rules.");
@@ -389,7 +396,7 @@ fileInput.addEventListener('change', async (e)=>{
 });
 
 /* ---------------------------------------------------------------- *
- *  Rendering Engine & Helper Blocks
+ *  Helpers
  * ---------------------------------------------------------------- */
 function escapeHtml(str){ return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
@@ -410,9 +417,15 @@ function mat2mul(a, b){
   ];
 }
 
+/* ---------------------------------------------------------------- *
+ *  Document Load — build one placeholder wrap per page, lazily render
+ * ---------------------------------------------------------------- */
 async function loadPdfFromArrayBuffer(buf, name){
-  if(renderTask){ try{ renderTask.cancel(); }catch(e){} }
   if(pdfDoc){ try{ await pdfDoc.destroy(); }catch(e){} }
+  if(pageObserver){ pageObserver.disconnect(); pageObserver = null; }
+  pagesContainer.innerHTML = '';
+  pageWraps = [];
+
   try{
     loadingLabel.textContent = 'Parsing elements...';
     const task = pdfjsLib.getDocument({ data: buf });
@@ -420,54 +433,108 @@ async function loadPdfFromArrayBuffer(buf, name){
     totalPages = pdfDoc.numPages;
     currentPage = 1;
     userZoomed = false;
+
+    loadingLabel.textContent = 'Laying out pages...';
+    const pages = await Promise.all(Array.from({length: totalPages}, (_, i) => pdfDoc.getPage(i+1)));
+    const baseViewports = pages.map(p => p.getViewport({ scale: 1 }));
+
+    scale = Math.max(0.3, (scrollArea.clientWidth - 28) / baseViewports[0].width);
+    committedScale = scale;
+
+    baseViewports.forEach((bv, idx)=>{
+      const wrap = document.createElement('div');
+      wrap.className = 'page-wrap';
+      wrap.dataset.pageNum = String(idx+1);
+      wrap.style.width = (bv.width * scale) + 'px';
+      wrap.style.height = (bv.height * scale) + 'px';
+      const tag = document.createElement('span');
+      tag.className = 'page-num-tag';
+      tag.textContent = `${idx+1} / ${totalPages}`;
+      wrap.appendChild(tag);
+      pagesContainer.appendChild(wrap);
+
+      pageWraps.push({
+        baseWidth: bv.width, baseHeight: bv.height,
+        el: wrap, canvas: null, textLayer: null,
+        rendered: false, renderedScale: 0, gen: 0
+      });
+    });
+
     launcher.hidden = true;
     scrollArea.hidden = false;
+    scrollArea.scrollTop = 0;
     bumpToolbar();
-    await renderPage(currentPage);
+    updatePageIndicator();
+
+    pageObserver = new IntersectionObserver((entries)=>{
+      entries.forEach(entry=>{
+        if(!entry.isIntersecting) return;
+        const idx = parseInt(entry.target.dataset.pageNum, 10) - 1;
+        const pw = pageWraps[idx];
+        if(pw && (!pw.rendered || pw.renderedScale !== scale)){
+          renderPageInto(idx);
+        }
+      });
+    }, { root: scrollArea, rootMargin: '900px 0px 900px 0px', threshold: 0.01 });
+
+    pageWraps.forEach(pw => pageObserver.observe(pw.el));
+
   }catch(err){
+    console.error(err);
     showToast("Rendering engine baseline crash.");
   }finally{
     loadingOverlay.hidden = true;
   }
 }
 
-async function renderPage(num){
-  const myGen = ++renderGen; // any newer renderPage() call invalidates this run
-  const page = await pdfDoc.getPage(num);
-  if(myGen !== renderGen) return; // superseded while awaiting the page
+/* ---------------------------------------------------------------- *
+ *  Per-page render, double-buffered (build offscreen, swap in one go)
+ *  so the visible canvas is never cleared/blank while re-rendering.
+ * ---------------------------------------------------------------- */
+async function renderPageInto(idx){
+  const pw = pageWraps[idx];
+  if(!pw || !pdfDoc) return;
+  const myGen = ++pw.gen;
+  const targetScale = scale;
 
-  if(!userZoomed){
-    const base = page.getViewport({ scale: 1 });
-    scale = Math.max(0.3, (scrollArea.clientWidth - 28) / base.width);
-  }
-  const viewport = page.getViewport({ scale });
-  canvas.width = Math.floor(viewport.width * DPR);
-  canvas.height = Math.floor(viewport.height * DPR);
-  canvas.style.width = viewport.width + 'px';
-  canvas.style.height = viewport.height + 'px';
-  pageWrap.style.width = viewport.width + 'px';
-  pageWrap.style.height = viewport.height + 'px';
+  let pdfPage;
+  try{ pdfPage = await pdfDoc.getPage(idx+1); }catch(e){ return; }
+  if(myGen !== pw.gen) return;
 
-  const ctx = canvas.getContext('2d');
+  const viewport = pdfPage.getViewport({ scale: targetScale });
+
+  const newCanvas = document.createElement('canvas');
+  newCanvas.className = 'page-canvas';
+  newCanvas.width = Math.floor(viewport.width * DPR);
+  newCanvas.height = Math.floor(viewport.height * DPR);
+  newCanvas.style.width = viewport.width + 'px';
+  newCanvas.style.height = viewport.height + 'px';
+  const ctx = newCanvas.getContext('2d');
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  if(renderTask){ try{ renderTask.cancel(); }catch(e){} }
-  renderTask = page.render({ canvasContext: ctx, viewport });
-  try{ await renderTask.promise; }catch(e){}
-  if(myGen !== renderGen) return; // a newer render took over mid-draw
 
-  textLayerDiv.style.width = viewport.width + 'px';
-  textLayerDiv.style.height = viewport.height + 'px';
-  textLayerDiv.innerHTML = '';
-  const textContent = await page.getTextContent();
-  if(myGen !== renderGen) return; // stale by the time text content arrived
-  buildWordSpans(textContent, viewport, textLayerDiv);
-  pageIndicator.textContent = `${num} / ${totalPages}`;
-  hideCard();
+  const renderTask = pdfPage.render({ canvasContext: ctx, viewport });
+  try{ await renderTask.promise; }catch(e){ return; }
+  if(myGen !== pw.gen) return;
 
-  // This render is now authoritative at `scale` — clear any interim CSS zoom preview
-  renderedScale = scale;
-  pageWrap.style.transform = 'none';
-  pageWrap.style.transformOrigin = '';
+  let textContent;
+  try{ textContent = await pdfPage.getTextContent(); }catch(e){ textContent = { items: [], styles: {} }; }
+  if(myGen !== pw.gen) return;
+
+  const newTextLayer = document.createElement('div');
+  newTextLayer.className = 'text-layer';
+  newTextLayer.style.width = viewport.width + 'px';
+  newTextLayer.style.height = viewport.height + 'px';
+  buildWordSpans(textContent, viewport, newTextLayer);
+
+  // Atomic swap: old canvas/text-layer stay visible right up until replacement.
+  pw.el.style.width = viewport.width + 'px';
+  pw.el.style.height = viewport.height + 'px';
+  if(pw.canvas) pw.el.replaceChild(newCanvas, pw.canvas); else pw.el.appendChild(newCanvas);
+  if(pw.textLayer) pw.el.replaceChild(newTextLayer, pw.textLayer); else pw.el.appendChild(newTextLayer);
+  pw.canvas = newCanvas;
+  pw.textLayer = newTextLayer;
+  pw.rendered = true;
+  pw.renderedScale = targetScale;
 }
 
 function buildWordSpans(textContent, viewport, container){
@@ -520,7 +587,7 @@ function buildWordSpans(textContent, viewport, container){
   container.appendChild(frag);
 }
 
-textLayerDiv.addEventListener('click', (e)=>{
+pagesContainer.addEventListener('click', (e)=>{
   const span = e.target.closest('.word');
   if(!span) return;
   e.stopPropagation();
@@ -590,10 +657,29 @@ wcClose.addEventListener('click', hideCard);
 document.addEventListener('click', (e)=>{ if(!wordCard.hidden && !wordCard.contains(e.target) && !e.target.closest('.word')) hideCard(); });
 
 /* ---------------------------------------------------------------- *
- *  Navigation & Gestures
+ *  Toolbar visibility / current-page tracking
  * ---------------------------------------------------------------- */
 let hideTimer;
 function bumpToolbar(){ toolbar.classList.add('visible'); clearTimeout(hideTimer); hideTimer = setTimeout(()=>toolbar.classList.remove('visible'), 3200); }
+
+function updatePageIndicator(){
+  const areaRect = scrollArea.getBoundingClientRect();
+  const refY = areaRect.top + 70;
+  let best = 1, bestDist = Infinity;
+  pageWraps.forEach((pw, idx)=>{
+    const r = pw.el.getBoundingClientRect();
+    if(r.bottom < areaRect.top || r.top > areaRect.bottom) return;
+    const dist = Math.abs(r.top - refY);
+    if(dist < bestDist){ bestDist = dist; best = idx+1; }
+  });
+  currentPage = best;
+  pageIndicator.textContent = `${currentPage} / ${totalPages}`;
+}
+
+scrollArea.addEventListener('scroll', debounce(()=>{
+  updatePageIndicator();
+  bumpToolbar();
+}, 60), { passive: true });
 
 function toggleFullscreen(){
   const el = document.documentElement;
@@ -607,14 +693,14 @@ function toggleFullscreen(){
   }
 }
 ['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','MSFullscreenChange'].forEach(evt=>{
-  document.addEventListener(evt, ()=>{ if(pdfDoc && !userZoomed) renderPage(currentPage); });
+  document.addEventListener(evt, ()=>{ if(pdfDoc && !userZoomed) recomputeFitAndApply(); });
 });
 
 // Single tap toggles the toolbar; a second tap within the window toggles fullscreen instead.
 let tapCount = 0, tapTimer = null;
 const DOUBLE_TAP_MS = 280;
 scrollArea.addEventListener('click', (e)=>{
-  if(e.target !== scrollArea && e.target !== pageWrap && e.target !== canvas) return;
+  if(e.target !== scrollArea && e.target !== pagesContainer) return;
   tapCount++;
   if(tapCount === 1){
     tapTimer = setTimeout(()=>{
@@ -627,79 +713,116 @@ scrollArea.addEventListener('click', (e)=>{
     toggleFullscreen();
   }
 });
-prevBtn.addEventListener('click', ()=>{ if(currentPage>1){ currentPage--; renderPage(currentPage); } });
-nextBtn.addEventListener('click', ()=>{ if(currentPage<totalPages){ currentPage++; renderPage(currentPage); } });
-backBtn.addEventListener('click', () => { scrollArea.hidden = true; launcher.hidden = false; toolbar.classList.remove('visible'); hideCard(); pdfDoc = null; loadHubPapers(); });
 
+function goToPage(n){
+  n = Math.max(1, Math.min(totalPages, n));
+  const pw = pageWraps[n-1];
+  if(!pw) return;
+  const rect = pw.el.getBoundingClientRect();
+  const areaRect = scrollArea.getBoundingClientRect();
+  const targetTop = scrollArea.scrollTop + (rect.top - areaRect.top) - 12;
+  scrollArea.scrollTo({ top: targetTop, behavior: 'smooth' });
+}
+prevBtn.addEventListener('click', ()=> goToPage(currentPage - 1));
+nextBtn.addEventListener('click', ()=> goToPage(currentPage + 1));
+backBtn.addEventListener('click', () => {
+  scrollArea.hidden = true; launcher.hidden = false; toolbar.classList.remove('visible');
+  hideCard(); pdfDoc = null; loadHubPapers();
+});
+
+/* ---------------------------------------------------------------- *
+ *  Zoom — instant CSS preview on the whole stack, then a single
+ *  flicker-free commit (resize + double-buffered re-render).
+ * ---------------------------------------------------------------- */
+function contentLocalPoint(viewportX, viewportY){
+  const contRect = pagesContainer.getBoundingClientRect();
+  return { x: viewportX - contRect.left, y: viewportY - contRect.top };
+}
+
+function commitZoomAt(oldScale, anchorX, anchorY){
+  const factor = scale / oldScale;
+
+  pageWraps.forEach(pw => {
+    pw.el.style.width = (pw.baseWidth * scale) + 'px';
+    pw.el.style.height = (pw.baseHeight * scale) + 'px';
+  });
+  pagesContainer.style.transform = 'none';
+  pagesContainer.style.transformOrigin = '';
+
+  if(Math.abs(factor - 1) > 0.001){
+    scrollArea.scrollLeft += anchorX * (factor - 1);
+    scrollArea.scrollTop  += anchorY * (factor - 1);
+  }
+
+  hideCard();
+  committedScale = scale;
+  // Re-render only pages that were already rendered — keeps zoom cheap and
+  // still-offscreen pages simply pick up the new scale via the observer later.
+  pageWraps.forEach((pw, idx) => { if(pw.rendered) renderPageInto(idx); });
+  updatePageIndicator();
+}
+
+function recomputeFitAndApply(){
+  if(!pageWraps.length) return;
+  const oldScale = committedScale;
+  scale = Math.max(0.3, (scrollArea.clientWidth - 28) / pageWraps[0].baseWidth);
+  const p = contentLocalPoint(scrollArea.getBoundingClientRect().left + scrollArea.clientWidth/2,
+                               scrollArea.getBoundingClientRect().top + scrollArea.clientHeight/2);
+  commitZoomAt(oldScale, p.x, p.y);
+}
+
+function zoomByFactor(factor){
+  const oldScale = committedScale;
+  scale = Math.min(4, Math.max(0.3, committedScale * factor));
+  userZoomed = true;
+  const areaRect = scrollArea.getBoundingClientRect();
+  const p = contentLocalPoint(areaRect.left + areaRect.width/2, areaRect.top + areaRect.height/2);
+  commitZoomAt(oldScale, p.x, p.y);
+}
+zoomInBtn.addEventListener('click', ()=> zoomByFactor(1.2));
+zoomOutBtn.addEventListener('click', ()=> zoomByFactor(1/1.2));
+fitBtn.addEventListener('click', ()=>{ userZoomed = false; recomputeFitAndApply(); });
+
+/* Pinch-to-zoom: two-finger gesture only. Single-finger scroll is left to
+   the browser's native, buttery-smooth vertical scrolling (touch-action:pan-y). */
 scrollArea.addEventListener('touchstart', (e)=>{
-  if (e.touches.length === 1) { isPanning = true; startX = e.touches[0].clientX; startY = e.touches[0].clientY; scrollStartX = scrollArea.scrollLeft; scrollStartY = scrollArea.scrollTop; }
-  else if (e.touches.length === 2) {
-    isPanning = false;
-    initialPinchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-    initialScale = scale;
-    renderedScale = scale; // baseline: canvas is currently drawn at `scale`
+  if(e.touches.length === 2){
+    initialPinchDist = Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY
+    );
+    pinchStartScale = committedScale;
+    scale = committedScale;
     const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
     const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-    const wrapRect = pageWrap.getBoundingClientRect();
-    pinchOriginX = midX - wrapRect.left;
-    pinchOriginY = midY - wrapRect.top;
+    const p = contentLocalPoint(midX, midY);
+    pinchOriginX = p.x; pinchOriginY = p.y;
   }
-}, {passive: false});
+}, { passive: false });
 
 scrollArea.addEventListener('touchmove', (e)=>{
-  if (e.touches.length === 1 && isPanning) { scrollArea.scrollLeft = scrollStartX + startX - e.touches[0].clientX; scrollArea.scrollTop = scrollStartY + startY - e.touches[0].clientY; }
-  else if (e.touches.length === 2) {
+  if(e.touches.length === 2 && initialPinchDist > 0){
     e.preventDefault();
-    const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-    if(initialPinchDist > 0) {
-      let newScale = Math.min(4, Math.max(0.4, initialScale * (dist / initialPinchDist)));
-      if(Math.abs(newScale - scale) > 0.01) {
-        scale = newScale;
-        userZoomed = true;
-        // Instant visual feedback via CSS transform — no re-render (and no text-layer
-        // rebuild) mid-gesture, which is what was causing the multi-second "stuck" freeze.
-        pageWrap.style.transformOrigin = `${pinchOriginX}px ${pinchOriginY}px`;
-        pageWrap.style.transform = `scale(${scale / renderedScale})`;
-      }
+    const dist = Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY
+    );
+    const newScale = Math.min(4, Math.max(0.3, pinchStartScale * (dist / initialPinchDist)));
+    if(Math.abs(newScale - scale) > 0.01){
+      scale = newScale;
+      userZoomed = true;
+      pagesContainer.style.transformOrigin = `${pinchOriginX}px ${pinchOriginY}px`;
+      pagesContainer.style.transform = `scale(${scale / committedScale})`;
     }
   }
-}, {passive: false});
+}, { passive: false });
 
 scrollArea.addEventListener('touchend', (e)=>{
-  const wasPinching = initialPinchDist > 0;
-  if(e.touches.length === 0 && !wasPinching) {
-    const dx = startX - (e.changedTouches[0]?.clientX || startX), dy = startY - (e.changedTouches[0]?.clientY || startY);
-    if(scrollArea.scrollWidth <= scrollArea.clientWidth + 5 && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-      if(dx > 0) nextBtn.click(); else prevBtn.click();
-    }
-  }
-  if(e.touches.length < 2){
-    if(wasPinching){
-      // Pinch just ended: keep the point under the fingers stationary, then do the
-      // one real re-render (full-res canvas + text layer) for this whole gesture.
-      const factor = scale / renderedScale;
-      if(Math.abs(factor - 1) > 0.005){
-        scrollArea.scrollLeft += pinchOriginX * (factor - 1);
-        scrollArea.scrollTop  += pinchOriginY * (factor - 1);
-      }
-      renderPage(currentPage);
-    }
+  if(e.touches.length < 2 && initialPinchDist > 0){
+    commitZoomAt(pinchStartScale, pinchOriginX, pinchOriginY);
     initialPinchDist = 0;
   }
-}, {passive: true});
-
-/* Zoom Group UI Click Bindings — instant CSS preview, then one real render */
-function stepZoom(newScale){
-  renderedScale = scale;
-  scale = newScale;
-  userZoomed = true;
-  pageWrap.style.transformOrigin = '50% 0';
-  pageWrap.style.transform = `scale(${scale / renderedScale})`;
-  renderPage(currentPage);
-}
-zoomInBtn.addEventListener('click', ()=> stepZoom(Math.min(4, scale*1.2)));
-zoomOutBtn.addEventListener('click', ()=> stepZoom(Math.max(0.3, scale/1.2)));
-fitBtn.addEventListener('click', ()=>{ userZoomed = false; renderPage(currentPage); });
+}, { passive: true });
 
 /* Themes initialization logic */
 function applyTheme(t){ document.documentElement.setAttribute('data-theme', t); document.querySelectorAll('.theme-dot').forEach(b=>b.classList.toggle('active', b.dataset.theme===t)); }
